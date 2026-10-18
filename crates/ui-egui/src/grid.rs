@@ -63,6 +63,9 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Dragging across headers while pointing in a formula: the anchor row or column.
+    PointRows(u32),
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -1626,7 +1629,8 @@ pub(crate) fn paint_selection(
             if !range_in_pane(r, rows, cols) {
                 continue;
             }
-            let rr = geo.range_rect(sh, r);
+            // Whole columns or rows reach far past the pane: keep the shape near the view.
+            let rr = geo.range_rect(sh, r).intersect(p.clip_rect().expand(8.0));
             let col = REF_COLORS[idx];
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
             p.rect_stroke(rr, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
@@ -2017,6 +2021,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             let c = geo.col_at(sh, p.x);
             if point_header(app, wb, sh, RangeRef::cols(c, c)) {
+                app.grid.drag = Drag::PointCols(c);
                 return;
             }
             if resp.drag_started()
@@ -2040,6 +2045,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             let r = geo.row_at(sh, p.y);
             if point_header(app, wb, sh, RangeRef::rows(r, r)) {
+                app.grid.drag = Drag::PointRows(r);
                 return;
             }
             let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
@@ -2180,6 +2186,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let c = geo.col_at(sh, p.x);
                 let _ =
                     app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
+                scroll_by(app, vec2(auto.x, 0.0));
+            }
+            Drag::PointRows(anchor) => {
+                let r = geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+                point_header(app, wb, sh, RangeRef::rows(anchor.min(r), anchor.max(r)));
+                scroll_by(app, vec2(0.0, auto.y));
+            }
+            Drag::PointCols(anchor) => {
+                let c = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
+                point_header(app, wb, sh, RangeRef::cols(anchor.min(c), anchor.max(c)));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::MoveCols { source, .. } => {

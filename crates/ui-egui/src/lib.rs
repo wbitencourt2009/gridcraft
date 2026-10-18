@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod assistant;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -16,6 +17,8 @@ pub mod dialogs;
 pub mod editor;
 pub mod fonts;
 pub mod formula_bar;
+mod formula_arg_choices;
+mod formula_help_pt_br;
 mod formula_locale;
 pub mod grid;
 pub mod i18n;
@@ -249,6 +252,8 @@ pub struct SheetApp {
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
     pub name_box: Option<String>,
+    /// The Assistant pane's Gemini chat (UI-only; never saved with preferences).
+    pub assistant: assistant::Assistant,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
     pub(crate) shots: control::Shots,
@@ -300,6 +305,7 @@ impl SheetApp {
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
             name_box: None,
+            assistant: Default::default(),
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,

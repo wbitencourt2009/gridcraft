@@ -188,6 +188,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
         if !ed.autocomplete.is_empty() && tab {
             ed.accept_autocomplete();
+        } else if !ed.arg_choices.is_empty() && tab {
+            ed.accept_arg_choice();
         } else if enter {
             action = Some((if shift { -1 } else { 1 }, 0, false, false));
         } else if tab {
@@ -202,6 +204,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         if esc {
             if !ed.autocomplete.is_empty() {
                 ed.autocomplete.clear();
+            } else if !ed.arg_choices.is_empty() {
+                ed.arg_choices.clear();
             } else if ed.completion.is_some() {
                 ed.completion = None;
             } else {
@@ -219,12 +223,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             )
         });
         let (up, down, left, right, ashift) = arrows;
-        if (up || down) && !ed.autocomplete.is_empty() {
+        if (up || down) && (!ed.autocomplete.is_empty() || !ed.arg_choices.is_empty()) {
             ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
             });
-            let n = ed.autocomplete.len();
+            let n = ed.autocomplete.len().max(ed.arg_choices.len());
             ed.ac_index = if down { (ed.ac_index + 1) % n } else { (ed.ac_index + n - 1) % n };
         } else if ed.enter_mode && (up || down || left || right) && !ed.from_formula_bar {
             let (dr, dc) = if up {
@@ -326,6 +330,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             })
             .collect();
         ed.update_autocomplete(&names);
+        ed.update_arg_choices();
         app.session.mode = if ed.can_point() {
             gridcraft_engine::Mode::Point
         } else if ed.enter_mode {
@@ -354,59 +359,50 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         // Areas have their own clip rect: keep cell helpers inside the worksheet.
         let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
         egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
-                if !ed.autocomplete.is_empty() {
-                    let mut pick = None;
-                    for (i, n) in ed.autocomplete.iter().enumerate() {
-                        let sel = i == ed.ac_index;
-                        let r = ui.add(
-                            egui::Button::selectable(sel, egui::RichText::new(format!("ƒ  {n}")).font(theme::ui_font(12.5)))
-                                .min_size(vec2(220.0, 20.0)),
-                        );
-                        if r.clicked() {
-                            pick = Some(i);
-                        }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale) {
-                            r.on_hover_text(desc);
-                        }
-                    }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale)) {
-                        ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
-                    }
-                    if let Some(i) = pick {
-                        ed.ac_index = i;
-                        ed.accept_autocomplete();
-                        ed.request_focus = true;
-                    }
-                } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale)
-                {
-                    ui.horizontal_wrapped(|ui| {
+            if !ed.autocomplete.is_empty() {
+                let entries: Vec<String> = ed.autocomplete.iter().map(|n| format!("ƒ  {n}")).collect();
+                let tip = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale));
+                if let Some(i) = popup_list(ui, &entries, ed.ac_index, tip) {
+                    ed.ac_index = i;
+                    ed.accept_autocomplete();
+                    ed.request_focus = true;
+                }
+            } else if let Some((name, arg)) = ed.current_function()
+                && let Some(sig) = crate::formula_locale::signature(&name, ed.locale)
+            {
+                // Like Excel: one compact line, the current argument in bold.
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
+                        let font = |bold: bool| if bold { theme::ui_bold(12.0) } else { theme::ui_font(12.0) };
+                        let label = |ui: &mut egui::Ui, text: String, bold: bool| {
+                            ui.add(egui::Label::new(egui::RichText::new(text).font(font(bold))).extend());
+                        };
                         let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{}(", ed.locale.function_name(head))).font(theme::ui_font(12.0)));
+                        label(ui, format!("{}(", ed.locale.function_name(head)), false);
                         let inner = rest.trim_end_matches(')');
-                        let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
+                        let sep = format!("{} ", ed.locale.list_separator());
+                        let parts: Vec<&str> = inner.split(&sep).collect();
                         for (i, part) in parts.iter().enumerate() {
                             let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
-                            let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
-                            ui.label(txt);
+                            label(ui, (*part).to_string(), is_cur);
                             if i + 1 < parts.len() {
-                                ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
+                                label(ui, sep.clone(), false);
                             }
                         }
-                        ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
+                        label(ui, ")".into(), false);
                     });
-                    // The description too, so values an argument takes (DATEDIF's units, #363) show
-                    // while it's typed; wrapped to the hint's width.
-                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale) {
-                        ui.set_max_width(ui.min_rect().width().max(220.0));
-                        ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
+                });
+                if !ed.arg_choices.is_empty() {
+                    let entries: Vec<String> = ed.arg_choices.iter().map(|(v, l, _)| format!("(…)  {v} - {l}")).collect();
+                    let tip = ed.arg_choices.get(ed.ac_index).map(|(_, _, t)| t.clone());
+                    if let Some(i) = popup_list(ui, &entries, ed.ac_index, tip) {
+                        ed.ac_index = i;
+                        ed.accept_arg_choice();
+                        ed.request_focus = true;
                     }
                 }
-            });
+            }
         });
     }
     app.editor = Some(ed);
@@ -450,6 +446,44 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
             return;
         }
     }
+}
+
+/// Like Excel's AutoComplete and argument lists: entries stacked in a popup, the highlighted
+/// one's explanation in a tip beside it. Returns the clicked entry.
+fn popup_list(ui: &mut egui::Ui, entries: &[String], selected: usize, tip: Option<String>) -> Option<usize> {
+    let mut pick = None;
+    ui.horizontal_top(|ui| {
+        let mut sel_top = None;
+        let list = egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
+            // The row around list and tip is horizontal: stack the entries.
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, text) in entries.iter().enumerate() {
+                    let sel = i == selected;
+                    let r = ui.add(
+                        egui::Button::selectable(sel, egui::RichText::new(text).font(theme::ui_font(12.5))).min_size(vec2(180.0, 22.0)),
+                    );
+                    if r.clicked() {
+                        pick = Some(i);
+                    }
+                    if sel {
+                        sel_top = Some(r.rect.top());
+                    }
+                }
+            });
+        });
+        if let Some(tip) = tip {
+            let offset = sel_top.map_or(0.0, |t| (t - list.response.rect.top() - 2.0).max(0.0));
+            ui.vertical(|ui| {
+                ui.add_space(offset);
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+                    ui.set_max_width(300.0);
+                    ui.add(egui::Label::new(egui::RichText::new(tip).font(theme::ui_font(12.0))).wrap());
+                });
+            });
+        }
+    });
+    pick
 }
 
 fn function_names() -> Vec<String> {

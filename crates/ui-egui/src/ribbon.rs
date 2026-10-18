@@ -1059,6 +1059,11 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    sep(ui);
+    // Where Excel keeps Copilot: a chat that creates and explains formulas (`assistant.rs`).
+    if big_button(ui, Icon::Comment, "Assistant", "Assistant", false).clicked() {
+        app.grid.pane = if app.grid.pane.as_deref() == Some("assistant") { None } else { Some("assistant".into()) };
+    }
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {

@@ -22,6 +22,10 @@ skrifa = { workspace = true }
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own
 # accessibility bus; pinned to one version so nothing is built twice.
+[target.'cfg(windows)'.dependencies]
+# Presses Win+H to start Windows voice typing from the Assistant's microphone button (`assistant.rs`).
+enigo = "0.6"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
 
@@ -33,6 +37,8 @@ gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
+# HTTPS client for the Assistant pane's Gemini requests (`assistant.rs`).
+ureq = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.

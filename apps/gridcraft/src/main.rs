@@ -229,6 +229,24 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// The Assistant pane's tools: GridCraft's MCP tools, answered by the window itself through the
+/// same control-channel methods an outside agent would use.
+fn assistant_tool(call: &mut dyn FnMut(&str, serde_json::Value) -> Result<serde_json::Value, String>, name: &str, args: &serde_json::Value) -> serde_json::Value {
+    struct InApp<'a>(&'a mut dyn FnMut(&str, serde_json::Value) -> Result<serde_json::Value, String>);
+    impl gridcraft_mcp::Backend for InApp<'_> {
+        fn call(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+            (self.0)(method, params)
+        }
+        fn has_ui(&self) -> bool {
+            false
+        }
+        fn describe(&self) -> String {
+            "GridCraft Assistant pane".into()
+        }
+    }
+    gridcraft_mcp::call_tool(&mut InApp(call), name, args).to_value()
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -297,6 +315,7 @@ fn main() -> eframe::Result<()> {
     if session.documents().is_empty() {
         session.new_workbook();
     }
+    gridcraft_ui_egui::assistant::register_tools(gridcraft_mcp::tool_definitions, assistant_tool);
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
@@ -410,5 +429,39 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod assistant_tests {
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    use serde_json::json;
+
+    use super::*;
+
+    /// The Assistant pane's tools are the MCP server's, answered by the window in-process.
+    #[test]
+    fn mcp_tools_drive_the_open_workbook() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        let mut call = |method: &str, params: serde_json::Value| match handle(&mut app, &ctx, method, &params) {
+            Outcome::Done(v) if v["ok"] == json!(true) => Ok(v["result"].clone()),
+            Outcome::Done(v) => Err(v["error"].as_str().unwrap_or("error").to_string()),
+            Outcome::Screenshot { .. } => Err("no screenshots".into()),
+        };
+        let values = json!([["Item", "Valor"], ["Aluguel", 1200], ["Mercado", 800], ["Total", "=SUM(B2:B3)"]]);
+        let r = assistant_tool(&mut call, "write_range", &json!({"range": "A1", "values": values}));
+        assert_eq!(r["isError"], json!(false), "{r}");
+        let r = assistant_tool(&mut call, "format_range", &json!({"range": "A1:B1", "bold": true, "fillColor": "#1F4E78", "fontColor": "#FFFFFF"}));
+        assert_eq!(r["isError"], json!(false), "{r}");
+        let r = assistant_tool(&mut call, "execute_command", &json!({"command": "home.numberFormat", "params": {"range": "B2:B4", "code": "\"R$\" #,##0.00"}}));
+        assert_eq!(r["isError"], json!(false), "{r}");
+        let r = assistant_tool(&mut call, "read_range", &json!({"range": "A1:B4"}));
+        let text = r["content"][0]["text"].as_str().unwrap_or_default().to_string();
+        assert!(text.contains("Aluguel") && text.contains("2000"), "{text}");
+        let r = assistant_tool(&mut call, "no_such_tool", &json!({}));
+        assert_eq!(r["isError"], json!(true));
     }
 }
