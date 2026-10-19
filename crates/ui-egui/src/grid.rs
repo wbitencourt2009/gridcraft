@@ -131,6 +131,8 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    /// The open PivotTable report filter checklist.
+    pub pivot_filter: Option<crate::pivot_filter::Open>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
@@ -753,6 +755,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     // Interaction.
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu);
+    let pivot_filter_was_open = app.grid.pivot_filter.is_some();
     crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
     interact(app, ui, &resp, &geo, sh, &wb);
     crate::text_box::show(app, ui, &geo, sh);
@@ -761,6 +764,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
+    crate::pivot_filter::popup(app, ui, &geo, sh, pivot_filter_was_open);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
@@ -2057,6 +2061,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         let c = geo.cell_at(sh, p);
+        // PivotTable report filter drop-down ("(All)" ▾ above the report).
+        if let Some(f) = crate::pivot_filter::hit(sh, geo, p) {
+            crate::pivot_filter::open(app, f);
+            return;
+        }
         // Data validation list arrow next to the active cell.
         if let Some(r) = validation_arrow(sh, geo, sel.active)
             && r.contains(p)
@@ -3004,6 +3013,7 @@ pub(crate) fn paint_overlays(
     sh: &Sheet,
     sel: &gridcraft_engine::Selection,
 ) {
+    crate::pivot_filter::paint_arrows(p, sh, geo);
     // Validation dropdown arrow for the active cell.
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)

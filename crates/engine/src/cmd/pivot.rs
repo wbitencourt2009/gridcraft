@@ -101,6 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             value_settings
         ),
         cmd!("pivot.filter", "Filter Items", [], None, "{pivot?, field, selected: [\"East\", ..] | null (all), replace?}", has_doc, filter),
+        cmd!(query "pivot.items", "Field Items", [], None, "{pivot?, field} → {field, items: [labels], selected: [labels] | null (all)}", has_doc, items),
         cmd!("pivot.sort", "Sort Field", [], None, "{pivot?, field, order: asc|desc|none, replace?}", has_doc, sort),
         cmd!(
             "pivot.group",
@@ -811,6 +812,23 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     Ok(out)
+}
+
+/// Every item label of one source field (grouped like the field when it sits on an axis) and
+/// which ones its filter keeps: what the filter drop-down lists.
+fn items(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.items";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let (si, pi) = find_pivot(s, p)?;
+    let d = s.doc()?;
+    let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+    let src = pv::read_source(&d.wb, &pt.source, si).map_err(other)?;
+    let field = canonical(C, &src, &field)?;
+    let col = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
+    let group = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field)).map_or(PivotDateGroup::None, |f| f.date_group);
+    let items = pv::distinct_labels(&d.wb, &src, col, group, 100_000);
+    let selected = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)).and_then(|f| f.selected.clone());
+    Ok(json!({"field": field, "items": items, "selected": selected}))
 }
 
 fn list(s: &mut Session, _: &Json) -> Result<Json> {
@@ -1719,6 +1737,19 @@ mod tests {
         assert_eq!(text(&s, "A5"), "Grand Total");
         assert_eq!(val(&s, "B5"), Value::Number(420.0));
         assert!(s.execute("pivot.filter", json!({"field": "Product", "selected": []})).is_err());
+    }
+
+    #[test]
+    fn field_items_list_every_label_and_the_filter_selection() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+        let all = s.execute("pivot.items", json!({"field": "region"})).unwrap();
+        assert_eq!(all["field"], "Region");
+        assert_eq!(all["items"], json!(["East", "North", "West"]));
+        assert_eq!(all["selected"], Json::Null);
+        s.execute("pivot.filter", json!({"field": "Region", "selected": ["East", "West"]})).unwrap();
+        assert_eq!(s.execute("pivot.items", json!({"field": "Region"})).unwrap()["selected"], json!(["East", "West"]));
+        assert!(s.execute("pivot.items", json!({"field": "Nope"})).is_err());
     }
 
     #[test]
